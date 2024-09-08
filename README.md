@@ -3,7 +3,7 @@
 A work in progress web assembly parser
 
 ## Building
-Install [zig](https://ziglang.org/), version >= 0.13.0-dev.275+759c2211c
+Install [zig](https://ziglang.org/), version >= 0.14.0-dev.1403+28383d4d9
 
 Then run
 ```

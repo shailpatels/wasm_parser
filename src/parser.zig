@@ -35,87 +35,7 @@ pub const Parser = struct {
     }
 
     pub fn deinit(self: *Parser) void {
-        defer self.header.sections.deinit();
-        for (self.header.sections.items) |section| {
-            deinitSection(section);
-        }
-    }
-
-    fn deinitSection(section: Wasm.Section) void {
-        switch (section.section_type) {
-            .TYPE => {
-                defer section.content.type.deinit();
-                for (section.content.type.items) |function| {
-                    function.params.deinit();
-                    function.results.deinit();
-                }
-            },
-            .FUNCTION => section.content.function.deinit(),
-            .MEMORY => section.content.mem.deinit(),
-            .GLOBAL => {
-                defer section.content.global.deinit();
-                for (section.content.global.items) |global| {
-                    defer global.expression.instructions.deinit();
-                    for (global.expression.instructions.items) |instr|
-                        deinitInstruction(instr);
-                }
-            },
-            .EXPORT => section.content.exports.deinit(),
-            .CODE => {
-                defer section.content.code.deinit();
-                for (section.content.code.items) |code| {
-                    defer code.functions.deinit();
-                    for (code.functions.items) |func| {
-                        func.declr.deinit();
-                        deinitExpression(func.expression);
-                    }
-                }
-            },
-            .DATA => {
-                defer section.content.data.deinit();
-                for (section.content.data.items) |data| {
-                    switch (data) {
-                        inline .zero, .one, .two => |x| x.bytes.deinit(),
-                    }
-                    switch (data) {
-                        inline .zero, .two => |x| deinitExpression(x.expr),
-                        else => {},
-                    }
-                }
-            },
-            .CUSTOM => {
-                section.content.custom.bytes.deinit();
-            },
-            else => {},
-        }
-    }
-
-    fn deinitInstruction(instruction: Wasm.Instruction) void {
-        switch (instruction) {
-            .control => |control| {
-                if (control.encoding == null)
-                    return;
-
-                const encoding = control.encoding.?;
-                switch (encoding) {
-                    .block_instruction => |block| {
-                        defer block.instructions.deinit();
-                        for (block.instructions.items) |instr| {
-                            deinitInstruction(instr);
-                        }
-                    },
-                    .br, .call_indir, .call => {},
-                    else => unreachable,
-                }
-            },
-            else => {},
-        }
-    }
-
-    fn deinitExpression(expression: Wasm.Expression) void {
-        defer expression.instructions.deinit();
-        for (expression.instructions.items) |instr|
-            deinitInstruction(instr);
+        self.header.deinit();
     }
 
     pub fn parse(self: *Parser) !void {
@@ -186,7 +106,7 @@ pub const Parser = struct {
 
                 ret.content = Wasm.Section.Content{ .type = std.ArrayList(Wasm.Function).init(self.allocator) };
                 try ret.content.type.ensureTotalCapacity(num_functions);
-                errdefer deinitSection(ret);
+                errdefer ret.deinit();
 
                 var idx: u32 = 0;
                 while (idx < num_functions) : (idx += 1) {
@@ -202,7 +122,8 @@ pub const Parser = struct {
                 std.debug.print("Function index count {d}\n", .{size});
 
                 ret.content = Wasm.Section.Content{ .function = std.ArrayList(u32).init(self.allocator) };
-                errdefer deinitSection(ret);
+                errdefer ret.deinit();
+
                 var idx: usize = 0;
                 assert(bytes_read + (size - 1) < data.len);
 
@@ -221,7 +142,7 @@ pub const Parser = struct {
                 assert(size + bytes_read < data.len);
 
                 ret.content = Wasm.Section.Content{ .mem = std.ArrayList(Wasm.Section.Memory).init(self.allocator) };
-                errdefer deinitSection(ret);
+                errdefer ret.deinit();
                 var idx: usize = bytes_read;
                 while (idx < size + bytes_read) : (idx += 1) {
                     assert(data[idx] == 0x00 or data[idx] == 0x01);
@@ -251,9 +172,9 @@ pub const Parser = struct {
                 std.debug.print("global count {d}\n", .{size});
 
                 ret.content = Wasm.Section.Content{ .global = std.ArrayList(Wasm.Global).init(self.allocator) };
-                errdefer deinitSection(ret);
-                assert(bytes_read + (size - 1) < data.len);
+                errdefer ret.deinit();
 
+                assert(bytes_read + (size - 1) < data.len);
                 var idx: usize = 0;
                 while (idx < size) : (idx += 1) {
                     assert(data[bytes_read + 1] == 0x01 or data[bytes_read + 1] == 0x00);
@@ -278,7 +199,8 @@ pub const Parser = struct {
 
                 var idx: usize = 0;
                 ret.content = .{ .exports = std.ArrayList(Wasm.Export).init(self.allocator) };
-                errdefer deinitSection(ret);
+                errdefer ret.deinit();
+
                 while (idx < size) : (idx += 1) {
                     var next_bytes: usize = 0;
                     const name_size = readU32FromSlice(data[bytes_read..], &next_bytes) catch return Error.BadExportSection;
@@ -314,7 +236,7 @@ pub const Parser = struct {
 
                 std.debug.print("{d} code entries\n", .{size});
                 ret.content = .{ .code = std.ArrayList(Wasm.Code).init(self.allocator) };
-                errdefer deinitSection(ret);
+                errdefer ret.deinit();
 
                 var idx: usize = 0;
                 while (idx < size) : (idx += 1) {
@@ -385,7 +307,7 @@ pub const Parser = struct {
             },
             .DATA => {
                 ret.content = .{ .data = std.ArrayList(Wasm.Data).init(self.allocator) };
-                errdefer deinitSection(ret);
+                errdefer ret.deinit();
 
                 var bytes_read: usize = 0;
                 const num_data = readU32FromSlice(data, &bytes_read) catch return Error.BadDataSection;
@@ -545,9 +467,7 @@ pub const Parser = struct {
                             } } },
                         };
                         errdefer {
-                            defer ret.control.encoding.?.block_instruction.instructions.deinit();
-                            for (ret.control.encoding.?.block_instruction.instructions.items) |instr|
-                                deinitInstruction(instr);
+                            ret.deinit();
                         }
 
                         while (idx < data.len and data[idx] != 0x0B and data[idx] != 0x05) {

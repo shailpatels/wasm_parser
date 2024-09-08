@@ -5,6 +5,13 @@ pub const Header = struct {
 
     version: u32,
     sections: std.ArrayList(Section),
+
+    pub fn deinit(self: *Header) void {
+        defer self.sections.deinit();
+        for (self.sections.items) |*section| {
+            section.deinit();
+        }
+    }
 };
 
 pub const Section = struct {
@@ -12,6 +19,55 @@ pub const Section = struct {
 
     section_type: Types,
     content: Content,
+
+    pub fn deinit(section: *Section) void {
+        switch (section.section_type) {
+            .TYPE => {
+                defer section.content.type.deinit();
+                for (section.content.type.items) |function| {
+                    function.params.deinit();
+                    function.results.deinit();
+                }
+            },
+            .FUNCTION => section.content.function.deinit(),
+            .MEMORY => section.content.mem.deinit(),
+            .GLOBAL => {
+                defer section.content.global.deinit();
+                for (section.content.global.items) |global| {
+                    defer global.expression.instructions.deinit();
+                    for (global.expression.instructions.items) |*instr|
+                        instr.deinit();
+                }
+            },
+            .EXPORT => section.content.exports.deinit(),
+            .CODE => {
+                defer section.content.code.deinit();
+                for (section.content.code.items) |code| {
+                    defer code.functions.deinit();
+                    for (code.functions.items) |*func| {
+                        func.declr.deinit();
+                        func.expression.deinitExpression();
+                    }
+                }
+            },
+            .DATA => {
+                defer section.content.data.deinit();
+                for (section.content.data.items) |*data| {
+                    switch (data.*) {
+                        inline .zero, .one, .two => |x| x.bytes.deinit(),
+                    }
+                    switch (data.*) {
+                        inline .zero, .two => |*x| x.expr.deinitExpression(),
+                        else => {},
+                    }
+                }
+            },
+            .CUSTOM => {
+                section.content.custom.bytes.deinit();
+            },
+            else => {},
+        }
+    }
 
     pub const Content = union {
         type: std.ArrayList(Function),
@@ -138,6 +194,12 @@ pub const ValType = enum {
 
 pub const Expression = struct {
     instructions: std.ArrayList(Instruction),
+
+    fn deinitExpression(expression: *Expression) void {
+        defer expression.instructions.deinit();
+        for (expression.instructions.items) |*instr|
+            instr.deinit();
+    }
 };
 
 pub const Instruction = union(enum) {
@@ -145,6 +207,28 @@ pub const Instruction = union(enum) {
     control: Control,
     variable: Variable,
     memory: Memory,
+
+    pub fn deinit(instruction: *Instruction) void {
+        switch (instruction.*) {
+            .control => |control| {
+                if (control.encoding == null)
+                    return;
+
+                const encoding = control.encoding.?;
+                switch (encoding) {
+                    .block_instruction => |block| {
+                        defer block.instructions.deinit();
+                        for (block.instructions.items) |*instr| {
+                            deinit(instr);
+                        }
+                    },
+                    .br, .call_indir, .call => {},
+                    else => unreachable,
+                }
+            },
+            else => {},
+        }
+    }
 
     pub const Numeric = struct {
         opcode: OpCode,
